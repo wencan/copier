@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jinzhu/copier"
+	"github.com/wencan/copier"
 )
 
 type User struct {
@@ -319,5 +319,34 @@ func TestScanner(t *testing.T) {
 
 	if s.V.V != s2.V.V {
 		t.Errorf("Field V should be copied")
+	}
+}
+
+type structWithTag1 struct {
+	ID    int64 `form:"-"`
+	Name  string
+	Phone string `form:"phone"`
+}
+
+type structWithTag2 struct {
+	ID     int64 `protobuf:"-"`
+	Name   string
+	Mobile string `protobuf:"name=phone"`
+}
+
+func TestCopyStructWithTag(t *testing.T) {
+	s1 := structWithTag1{ID: 1, Name: "jinzhu", Phone: "1234567890"}
+	s2 := structWithTag2{}
+
+	c := copier.NewCopier("protobuf.name", "form")
+	c.Copy(&s2, s1)
+	if s2.ID != 0 {
+		t.Error("Ignore fields should not be copied")
+	}
+	if s2.Name != s1.Name {
+		t.Error("Name haven't been copied correctly.")
+	}
+	if s2.Mobile != s1.Phone {
+		t.Error("Phone haven't been copied correctly.")
 	}
 }

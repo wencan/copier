@@ -7,6 +7,7 @@
 ## Features
 
 * Copy from field to field with same name
+* Copy from field to field with same tag key
 * Copy from method to field with same name
 * Copy from field to method with same name
 * Copy from slice to slice
@@ -19,7 +20,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/jinzhu/copier"
+	"github.com/wencan/copier"
 )
 
 type User struct {

@@ -4,10 +4,32 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
+	"strings"
 )
+
+// defaultCopier copier without tag key
+var defaultCopier = NewCopier("", "")
 
 // Copy copy things
 func Copy(toValue interface{}, fromValue interface{}) (err error) {
+	return defaultCopier.Copy(toValue, fromValue)
+}
+
+// Copier copier with tag
+type Copier struct {
+	toTagKey, fromTagKey string
+}
+
+// NewCopier new copier
+func NewCopier(toTagKey, fromTagKey string) *Copier {
+	return &Copier{
+		toTagKey:   toTagKey,
+		fromTagKey: fromTagKey,
+	}
+}
+
+// Copy copy things with tag key
+func (copier *Copier) Copy(toValue interface{}, fromValue interface{}) (err error) {
 	var (
 		isSlice bool
 		amount  = 1
@@ -64,42 +86,44 @@ func Copy(toValue interface{}, fromValue interface{}) (err error) {
 
 		// check source
 		if source.IsValid() {
-			fromTypeFields := deepFields(fromType)
-			//fmt.Printf("%#v", fromTypeFields)
-			// Copy from field to field or method
-			for _, field := range fromTypeFields {
-				name := field.Name
+			fromTypeFields := deepFields(copier.fromTagKey, fromType)
+			// log.Println(fromTypeFields)
+			toTypeFields := deepFields(copier.toTagKey, toType)
+			// log.Println(toTypeFields)
 
-				if fromField := source.FieldByName(name); fromField.IsValid() {
+			// Copy from field to field or method
+			for name, field := range fromTypeFields {
+				if fromField := source.FieldByName(field.Name); fromField.IsValid() {
 					// has field
-					if toField := dest.FieldByName(name); toField.IsValid() {
-						if toField.CanSet() {
-							if !set(toField, fromField) {
-								if err := Copy(toField.Addr().Interface(), fromField.Interface()); err != nil {
-									return err
+					if toTypeField, exist := toTypeFields[name]; exist {
+						if toField := dest.FieldByName(toTypeField.Name); toField.IsValid() {
+							if toField.CanSet() {
+								if !set(toField, fromField) {
+									if err := copier.Copy(toField.Addr().Interface(), fromField.Interface()); err != nil {
+										return err
+									}
 								}
 							}
+							continue
 						}
-					} else {
-						// try to set to method
-						var toMethod reflect.Value
-						if dest.CanAddr() {
-							toMethod = dest.Addr().MethodByName(name)
-						} else {
-							toMethod = dest.MethodByName(name)
-						}
+					}
 
-						if toMethod.IsValid() && toMethod.Type().NumIn() == 1 && fromField.Type().AssignableTo(toMethod.Type().In(0)) {
-							toMethod.Call([]reflect.Value{fromField})
-						}
+					// try to set to method
+					var toMethod reflect.Value
+					if dest.CanAddr() {
+						toMethod = dest.Addr().MethodByName(name)
+					} else {
+						toMethod = dest.MethodByName(name)
+					}
+
+					if toMethod.IsValid() && toMethod.Type().NumIn() == 1 && fromField.Type().AssignableTo(toMethod.Type().In(0)) {
+						toMethod.Call([]reflect.Value{fromField})
 					}
 				}
 			}
 
 			// Copy from method to field
-			for _, field := range deepFields(toType) {
-				name := field.Name
-
+			for name, toTypefield := range toTypeFields {
 				var fromMethod reflect.Value
 				if source.CanAddr() {
 					fromMethod = source.Addr().MethodByName(name)
@@ -108,7 +132,7 @@ func Copy(toValue interface{}, fromValue interface{}) (err error) {
 				}
 
 				if fromMethod.IsValid() && fromMethod.Type().NumIn() == 0 && fromMethod.Type().NumOut() == 1 {
-					if toField := dest.FieldByName(name); toField.IsValid() && toField.CanSet() {
+					if toField := dest.FieldByName(toTypefield.Name); toField.IsValid() && toField.CanSet() {
 						values := fromMethod.Call([]reflect.Value{})
 						if len(values) >= 1 {
 							set(toField, values[0])
@@ -128,21 +152,63 @@ func Copy(toValue interface{}, fromValue interface{}) (err error) {
 	return
 }
 
-func deepFields(reflectType reflect.Type) []reflect.StructField {
-	var fields []reflect.StructField
+func deepFields(tagKey string, reflectType reflect.Type) map[string]reflect.StructField {
+	fields := make(map[string]reflect.StructField)
 
 	if reflectType = indirectType(reflectType); reflectType.Kind() == reflect.Struct {
 		for i := 0; i < reflectType.NumField(); i++ {
 			v := reflectType.Field(i)
 			if v.Anonymous {
-				fields = append(fields, deepFields(v.Type)...)
+				anonymous := deepFields(tagKey, v.Type)
+				for name, field := range anonymous {
+					if _, exist := fields[name]; !exist {
+						fields[name] = field
+					}
+				}
 			} else {
-				fields = append(fields, v)
+				name, skip := fieldName(tagKey, v)
+				if skip {
+					continue
+				}
+				fields[name] = v
 			}
 		}
 	}
 
 	return fields
+}
+
+func fieldName(tagKey string, field reflect.StructField) (name string, skip bool) {
+	tagParts := strings.Split(tagKey, ".")
+	tagKey = tagParts[0]
+	tagField := ""
+	if len(tagParts) >= 2 {
+		tagField = tagParts[1]
+	}
+
+	if tagKey == "" {
+		name = field.Name
+	} else {
+		key := field.Tag.Get(tagKey)
+		key = strings.ReplaceAll(key, " ", "")
+		if key == "" {
+			name = field.Name
+		} else if key == "-" {
+			skip = true
+		} else if tagField == "" {
+			keys := strings.Split(key, ",")
+			name = keys[0]
+		} else {
+			keys := strings.Split(key, ",")
+			for _, key := range keys {
+				pair := strings.Split(key, "=")
+				if len(pair) == 2 && pair[0] == tagField {
+					name = pair[1]
+				}
+			}
+		}
+	}
+	return
 }
 
 func indirect(reflectValue reflect.Value) reflect.Value {
